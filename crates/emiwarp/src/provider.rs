@@ -22,8 +22,15 @@ pub enum ProviderKind {
     OpenAI,
     Anthropic,
     Gemini,
-    /// Any OpenAI-Chat-Completions-compatible server (vLLM, LM Studio, llama.cpp,
-    /// LiteLLM, OpenRouter, Together, Groq...).
+    /// OpenRouter — one key, many upstream models.
+    OpenRouter,
+    /// Moonshot AI (Kimi). Serves both an OpenAI- and an Anthropic-shaped API;
+    /// EmiWarp drives the Anthropic one so the `claude` CLI works unmodified.
+    Kimi,
+    /// Zhipu / Z.ai (GLM). Same dual-API story as Kimi.
+    Glm,
+    /// Any OpenAI-Chat-Completions-compatible server (vLLM, LM Studio,
+    /// llama.cpp, LiteLLM, Together, Groq...).
     OpenAiCompatible,
 }
 
@@ -34,6 +41,9 @@ impl ProviderKind {
             "openai" => Some(Self::OpenAI),
             "anthropic" | "claude" => Some(Self::Anthropic),
             "gemini" | "google" => Some(Self::Gemini),
+            "openrouter" | "open_router" => Some(Self::OpenRouter),
+            "kimi" | "moonshot" => Some(Self::Kimi),
+            "glm" | "zhipu" | "zai" | "z.ai" => Some(Self::Glm),
             "openai_compatible" | "openai-compatible" | "compatible" | "custom" => {
                 Some(Self::OpenAiCompatible)
             }
@@ -47,6 +57,9 @@ impl ProviderKind {
             Self::OpenAI => "openai",
             Self::Anthropic => "anthropic",
             Self::Gemini => "gemini",
+            Self::OpenRouter => "openrouter",
+            Self::Kimi => "kimi",
+            Self::Glm => "glm",
             Self::OpenAiCompatible => "openai_compatible",
         }
     }
@@ -57,6 +70,10 @@ impl ProviderKind {
             Self::OpenAI => "https://api.openai.com/v1",
             Self::Anthropic => "https://api.anthropic.com",
             Self::Gemini => "https://generativelanguage.googleapis.com/v1beta",
+            Self::OpenRouter => "https://openrouter.ai/api/v1",
+            // Anthropic-shaped endpoints, so the `claude` CLI drives them as-is.
+            Self::Kimi => "https://api.moonshot.ai/anthropic",
+            Self::Glm => "https://api.z.ai/api/anthropic",
             Self::OpenAiCompatible => "http://127.0.0.1:8000/v1",
         }
     }
@@ -67,6 +84,9 @@ impl ProviderKind {
             Self::OpenAI => "gpt-4o",
             Self::Anthropic => "claude-sonnet-5",
             Self::Gemini => "gemini-2.0-flash",
+            Self::OpenRouter => "anthropic/claude-sonnet-5",
+            Self::Kimi => "kimi-k2-turbo-preview",
+            Self::Glm => "glm-4.6",
             Self::OpenAiCompatible => "default",
         }
     }
@@ -75,7 +95,12 @@ impl ProviderKind {
     pub fn requires_api_key(self) -> bool {
         match self {
             Self::Ollama | Self::OpenAiCompatible => false,
-            Self::OpenAI | Self::Anthropic | Self::Gemini => true,
+            Self::OpenAI
+            | Self::Anthropic
+            | Self::Gemini
+            | Self::OpenRouter
+            | Self::Kimi
+            | Self::Glm => true,
         }
     }
 
@@ -84,9 +109,11 @@ impl ProviderKind {
     /// own custom-endpoint UI without a translation layer.
     pub fn schema(self) -> WireSchema {
         match self {
-            Self::Anthropic => WireSchema::AnthropicMessages,
+            // Kimi and GLM both publish an Anthropic-compatible surface; using
+            // it means the `claude` CLI needs no patching to talk to them.
+            Self::Anthropic | Self::Kimi | Self::Glm => WireSchema::AnthropicMessages,
             Self::Gemini => WireSchema::GeminiGenerateContent,
-            Self::Ollama | Self::OpenAI | Self::OpenAiCompatible => {
+            Self::Ollama | Self::OpenAI | Self::OpenRouter | Self::OpenAiCompatible => {
                 WireSchema::OpenAiChatCompletions
             }
         }
@@ -96,8 +123,8 @@ impl ProviderKind {
     /// Overridable via `EMIWARP_HARNESS_CMD`.
     pub fn default_harness_command(self) -> &'static str {
         match self {
-            Self::Anthropic => "claude",
-            Self::OpenAI => "codex",
+            Self::Anthropic | Self::Kimi | Self::Glm => "claude",
+            Self::OpenAI | Self::OpenRouter => "codex",
             Self::Gemini => "gemini",
             // Both speak OpenAI Chat Completions, so the OpenAI CLI drives them
             // once `OPENAI_BASE_URL` is repointed.
@@ -167,8 +194,11 @@ impl ProviderProfile {
         let key = self.api_key.clone().unwrap_or_else(|| "sk-noauth".to_owned());
 
         match self.kind {
-            ProviderKind::Anthropic => {
-                env.insert("ANTHROPIC_API_KEY".into(), key);
+            ProviderKind::Anthropic | ProviderKind::Kimi | ProviderKind::Glm => {
+                env.insert("ANTHROPIC_API_KEY".into(), key.clone());
+                // Some builds of the CLI read the auth token rather than the
+                // key when a custom base URL is set; provide both.
+                env.insert("ANTHROPIC_AUTH_TOKEN".into(), key);
                 env.insert("ANTHROPIC_BASE_URL".into(), self.base_url.clone());
                 env.insert("ANTHROPIC_MODEL".into(), self.model.clone());
             }
@@ -177,7 +207,10 @@ impl ProviderProfile {
                 env.insert("GOOGLE_GEMINI_BASE_URL".into(), self.base_url.clone());
                 env.insert("GEMINI_MODEL".into(), self.model.clone());
             }
-            ProviderKind::OpenAI | ProviderKind::Ollama | ProviderKind::OpenAiCompatible => {
+            ProviderKind::OpenAI
+            | ProviderKind::OpenRouter
+            | ProviderKind::Ollama
+            | ProviderKind::OpenAiCompatible => {
                 env.insert("OPENAI_API_KEY".into(), key);
                 env.insert("OPENAI_BASE_URL".into(), self.base_url.clone());
                 env.insert("OPENAI_MODEL".into(), self.model.clone());

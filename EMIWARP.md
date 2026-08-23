@@ -95,15 +95,59 @@ frozen — so it wins over anything upstream derived.
 
 | Provider | CLI | Environment applied |
 | --- | --- | --- |
-| `anthropic` | `claude` | `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` |
+| `anthropic` | `claude` | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` |
+| `kimi` | `claude` | `ANTHROPIC_*` pointed at Moonshot's Anthropic-shaped API |
+| `glm` | `claude` | `ANTHROPIC_*` pointed at Z.ai's Anthropic-shaped API |
 | `openai` | `codex` | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` |
-| `gemini` | `gemini` | `GEMINI_API_KEY`, `GOOGLE_GEMINI_BASE_URL`, `GEMINI_MODEL` |
+| `openrouter` | `codex` | `OPENAI_*` pointed at openrouter.ai |
 | `ollama` | `codex` | `OPENAI_*` pointed at the Ollama daemon |
 | `openai_compatible` | `codex` | `OPENAI_*` pointed at your server |
+| `gemini` | `gemini` | `GEMINI_API_KEY`, `GOOGLE_GEMINI_BASE_URL`, `GEMINI_MODEL` |
 
-No CLI is patched. Ollama, vLLM, LM Studio, llama.cpp, LiteLLM, OpenRouter,
-Together and Groq all speak OpenAI Chat Completions, so they all work through the
-same path.
+No CLI is patched. Kimi and GLM both publish Anthropic-compatible endpoints, so
+the `claude` CLI drives them with nothing but a different base URL. Everything
+else speaks OpenAI Chat Completions.
+
+**Verified end to end:** with `EMIWARP_AI_PROVIDER=ollama`, `codex exec` ran
+against a local `qwen2.5-coder:1.5b` purely through `OPENAI_BASE_URL` — it did
+not touch the machine's ChatGPT subscription.
+
+---
+
+## Discovery: use what you already have
+
+EmiWarp scans for agent CLIs on `PATH` and model servers on localhost, so a
+machine that is already set up needs no configuration at all.
+
+```
+Agent CLIs
+  Claude Code    ready (2.1.241)
+  Codex          ready (codex-cli 0.26.0)
+  Gemini CLI     ready (0.8.2)
+  OpenCode       ready (1.18.4)
+  Qwen Code      ready (0.0.6)
+
+Local servers
+  Ollama         http://127.0.0.1:11434/v1  [qwen2.5-coder:1.5b]
+```
+
+Run it with `cargo run -p emiwarp --example doctor`.
+
+### Ambient auth — EmiWarp stores no credentials
+
+For any provider reached through its own CLI, **EmiWarp holds no token**. If
+`claude` is installed and signed in, spawning it inherits that session,
+subscription included. The credential belongs to the CLI and to you; none of it
+passes through EmiWarp, and none is written to disk by it.
+
+Login detection checks only for *existence*, never contents — and it is
+platform-aware, because Claude Code keeps its token in the macOS Keychain rather
+than a file, and a naive file check reports a signed-in user as signed out.
+
+Only providers with no CLI login of their own need `EMIWARP_API_KEY`.
+
+When nothing is configured, EmiWarp prefers a running local server (costs
+nothing, needs no account) over a signed-in CLI.
 
 ---
 

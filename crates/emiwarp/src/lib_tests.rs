@@ -130,12 +130,99 @@ fn provider_slugs_round_trip() {
         ProviderKind::OpenAI,
         ProviderKind::Anthropic,
         ProviderKind::Gemini,
+        ProviderKind::OpenRouter,
+        ProviderKind::Kimi,
+        ProviderKind::Glm,
         ProviderKind::OpenAiCompatible,
     ] {
         assert_eq!(ProviderKind::parse(kind.slug()), Some(kind));
     }
     assert_eq!(ProviderKind::parse("claude"), Some(ProviderKind::Anthropic));
+    assert_eq!(ProviderKind::parse("moonshot"), Some(ProviderKind::Kimi));
+    assert_eq!(ProviderKind::parse("zhipu"), Some(ProviderKind::Glm));
+    assert_eq!(ProviderKind::parse("open_router"), Some(ProviderKind::OpenRouter));
     assert_eq!(ProviderKind::parse("nope"), None);
+}
+
+#[test]
+fn kimi_and_glm_ride_the_anthropic_cli() {
+    // Both publish an Anthropic-shaped API. Driving that surface means the
+    // `claude` CLI needs no patching — only a different base URL.
+    for kind in [ProviderKind::Kimi, ProviderKind::Glm] {
+        assert_eq!(kind.schema(), WireSchema::AnthropicMessages);
+        assert_eq!(kind.default_harness_command(), "claude");
+
+        let p = cfg_with(kind, Some("k-test")).provider;
+        let env = p.harness_env();
+        assert_eq!(env["ANTHROPIC_BASE_URL"], kind.default_base_url());
+        assert_eq!(env["ANTHROPIC_API_KEY"], "k-test");
+        // Some CLI builds read the auth token instead of the key when a custom
+        // base URL is set, so both must be present.
+        assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "k-test");
+        assert!(kind.requires_api_key());
+    }
+}
+
+#[test]
+fn openrouter_uses_the_openai_surface() {
+    let p = cfg_with(ProviderKind::OpenRouter, Some("sk-or-x")).provider;
+    assert_eq!(p.kind.schema(), WireSchema::OpenAiChatCompletions);
+    assert_eq!(p.command(), "codex");
+    let env = p.harness_env();
+    assert_eq!(env["OPENAI_BASE_URL"], "https://openrouter.ai/api/v1");
+    assert_eq!(
+        p.chat_endpoint(),
+        "https://openrouter.ai/api/v1/chat/completions"
+    );
+}
+
+#[test]
+fn every_provider_has_a_usable_default_profile() {
+    // A provider with no default endpoint, model, or harness would surface as a
+    // confusing runtime failure rather than a config error.
+    for kind in [
+        ProviderKind::Ollama,
+        ProviderKind::OpenAI,
+        ProviderKind::Anthropic,
+        ProviderKind::Gemini,
+        ProviderKind::OpenRouter,
+        ProviderKind::Kimi,
+        ProviderKind::Glm,
+        ProviderKind::OpenAiCompatible,
+    ] {
+        assert!(kind.default_base_url().starts_with("http"), "{kind:?}");
+        assert!(!kind.default_model().is_empty(), "{kind:?}");
+        assert!(!kind.default_harness_command().is_empty(), "{kind:?}");
+        // No provider default may point at Warp-operated infrastructure.
+        assert!(crate::egress_allowed(kind.default_base_url()), "{kind:?}");
+    }
+}
+
+#[test]
+fn discovery_never_panics_and_reports_every_known_harness() {
+    let inv = crate::discover();
+    assert_eq!(inv.harnesses.len(), crate::discovery::HARNESSES.len());
+    // Report renders regardless of what is installed on the running machine.
+    let report = inv.report();
+    assert!(report.contains("Agent CLIs"));
+    assert!(report.contains("Local servers"));
+    // A usable harness must be installed.
+    for h in inv.usable_harnesses() {
+        assert!(h.path.is_some());
+    }
+}
+
+#[test]
+fn ambient_auth_stores_no_credential() {
+    // Every CLI-backed harness must be ambient: EmiWarp holds no token for it.
+    for spec in crate::discovery::HARNESSES {
+        assert_eq!(
+            spec.auth,
+            crate::AuthMode::Ambient,
+            "{} must not require EmiWarp to store a credential",
+            spec.id
+        );
+    }
 }
 
 #[test]

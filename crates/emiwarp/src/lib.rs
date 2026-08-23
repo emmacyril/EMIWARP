@@ -19,6 +19,7 @@
 //! complete corresponding source under AGPL-3.0.
 
 pub mod config;
+pub mod discovery;
 pub mod egress;
 pub mod identity;
 pub mod provider;
@@ -26,6 +27,7 @@ pub mod provider;
 use std::sync::OnceLock;
 
 pub use config::{Diagnostic, EmiConfig};
+pub use discovery::{AuthMode, DiscoveredHarness, Inventory, LocalServer, LoginProbe};
 pub use egress::{EgressDecision, classify as classify_egress};
 pub use identity::{Capability, Entitlements, LocalPrincipal};
 pub use provider::{ProviderKind, ProviderProfile, WireSchema};
@@ -97,6 +99,14 @@ pub fn brand_name() -> &'static str {
 /// Active provider profile.
 pub fn provider() -> &'static ProviderProfile {
     &runtime().config.provider
+}
+
+/// Scans for installed agent CLIs and running local model servers.
+///
+/// Not cached: the user may start Ollama or sign into a CLI while EmiWarp is
+/// running, and a stale "not installed" is worse than re-probing.
+pub fn discover() -> Inventory {
+    discovery::discover()
 }
 
 #[cfg(test)]

@@ -1,0 +1,222 @@
+name: build
+
+# Builds EmiWarp for every supported platform.
+#
+# EmiWarp is an overlay repo: it holds no upstream code. Each job clones
+# warpdotdev/warp, copies EmiWarp's sources over it, re-applies the anchored
+# overlay, and builds. That means CI also continuously proves the sync works —
+# if upstream moves an anchor, the overlay step fails here before anyone
+# notices locally.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "Upstream ref to build against"
+        required: false
+        default: ""
+  schedule:
+    # Weekly: catches an upstream change that moves an anchor even when nobody
+    # has pushed to EmiWarp.
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_URL: https://github.com/warpdotdev/warp.git
+  CARGO_TERM_COLOR: always
+  # A full debug-info release build of a GPU app is enormous; CI only needs the
+  # binary to link and run.
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            runner: macos-15
+            os: macos
+            artifact: emiwarp
+          - name: macos-x86_64
+            runner: macos-13
+            os: macos
+            artifact: emiwarp
+          - name: linux-x86_64
+            runner: ubuntu-22.04
+            os: linux
+            artifact: emiwarp
+          - name: windows-x86_64
+            runner: windows-latest
+            os: windows
+            artifact: emiwarp.exe
+
+    steps:
+      - name: Checkout EmiWarp
+        uses: actions/checkout@v4
+        with:
+          path: emiwarp
+
+      - name: Allow long paths (Windows)
+        if: matrix.os == 'windows'
+        shell: bash
+        run: git config --system core.longpaths true
+
+      - name: Resolve upstream ref
+        id: upstream
+        shell: bash
+        run: |
+          REF="${{ github.event.inputs.upstream_ref }}"
+          if [[ -z "$REF" ]]; then
+            REF="$(git ls-remote --symref "$UPSTREAM_URL" HEAD \
+              | awk '/^ref:/ {sub("refs/heads/","",$2); print $2; exit}')"
+            [[ -z "$REF" ]] && REF=master
+          fi
+          SHA="$(git ls-remote "$UPSTREAM_URL" "refs/heads/$REF" | awk '{print $1; exit}')"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Upstream::warpdotdev/warp $REF @ ${SHA:0:8}"
+
+      - name: Clone upstream
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "${{ steps.upstream.outputs.ref }}" \
+            "$UPSTREAM_URL" build
+          git -C build lfs install --local
+          git -C build lfs pull
+
+      - name: Apply EmiWarp overlay
+        shell: bash
+        run: |
+          for p in crates/emiwarp scripts/emiwarp .env.emiwarp.example README.md EMIWARP.md; do
+            [[ -e "emiwarp/$p" ]] || continue
+            rm -rf "build/$p"
+            mkdir -p "build/$(dirname "$p")"
+            cp -R "emiwarp/$p" "build/$p"
+          done
+          python3 emiwarp/scripts/emiwarp/overlay.py --root build
+          python3 emiwarp/scripts/emiwarp/overlay.py --root build --verify
+
+      - name: Assert EmiWarp invariants
+        shell: bash
+        working-directory: build
+        run: |
+          fail=0
+          assert() {
+            if grep -q "$2" "$3"; then
+              echo "  ok   $1"
+            else
+              echo "::error title=Invariant::$1"; fail=1
+            fi
+          }
+          S=crates/warp_core/src/channel/state.rs
+          assert "no telemetry sink"      'telemetry_config: None'       "$S"
+          assert "no crash reporting"     'crash_reporting_config: None' "$S"
+          assert "no autoupdate"          'autoupdate_config: None'      "$S"
+          assert "egress guard present"   'emiwarp_block_vendor_egress'  crates/http_client/src/lib.rs
+          assert "provider env present"   'emiwarp::harness_env_overlay' app/src/ai/agent_sdk/driver.rs
+          exit $fail
+
+      - name: Install Rust toolchain
+        shell: bash
+        working-directory: build
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: build
+          key: ${{ matrix.name }}
+          shared-key: emiwarp-${{ matrix.name }}
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Metal toolchain (macOS)
+        if: matrix.os == 'macos'
+        shell: bash
+        run: |
+          # crates/warpui/build.rs compiles .metal shaders to .air; without this
+          # component the build fails with "cannot execute tool 'metal'".
+          xcodebuild -downloadComponent MetalToolchain || \
+            echo "::warning title=Metal::download failed; may already be present"
+          xcrun metal --version || true
+
+      - name: Bootstrap (macOS / Linux)
+        if: matrix.os != 'windows'
+        shell: bash
+        working-directory: build
+        run: ./script/bootstrap --yes
+        env:
+          WARP_SKIP_SUDO_PROMPT: "1"
+          DEBIAN_FRONTEND: noninteractive
+
+      - name: Bootstrap (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        working-directory: build
+        run: ./script/windows/bootstrap.ps1
+
+      - name: Build
+        shell: bash
+        working-directory: build
+        run: cargo build --release --bin emiwarp
+
+      - name: Verify artifact
+        shell: bash
+        working-directory: build
+        run: |
+          BIN="target/release/${{ matrix.artifact }}"
+          test -f "$BIN" || { echo "::error title=Artifact::$BIN missing"; exit 1; }
+          ls -lh "$BIN"
+          if [[ "${{ matrix.os }}" != "windows" ]]; then
+            file "$BIN"
+            # A Warp-operated host reaching the binary would mean the egress
+            # guard was compiled out. The literal should still be present (the
+            # guard matches on it), but no live call should ever use it.
+            "$BIN" --version || echo "::notice::--version not supported by this target"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: emiwarp-${{ matrix.name }}
+          path: build/target/release/${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 14
+
+  overlay-tests:
+    name: overlay + unit tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: emiwarp crate tests
+        run: |
+          # The crate is standalone: it needs no upstream checkout to test.
+          mkdir -p /tmp/ws && cp -R crates /tmp/ws/
+          cd /tmp/ws
+          cat > Cargo.toml <<'EOF'
+          [workspace]
+          members = ["crates/emiwarp"]
+          resolver = "2"
+          [workspace.dependencies]
+          serde = { version = "1.0", features = ["derive", "rc"] }
+          serde_json = { version = "1.0", features = ["raw_value"] }
+          thiserror = "2.0.17"
+          EOF
+          cargo test -p emiwarp
+      - name: overlay self-description
+        run: python3 scripts/emiwarp/overlay.py --list
