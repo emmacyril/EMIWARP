@@ -185,12 +185,24 @@ infrastructure, and has no account or subscription of its own.
 Use the CLI to:
 * Run a coding agent against a local or hosted model
 * Point any OpenAI- or Anthropic-compatible endpoint at the terminal
-* Inspect which agent CLIs and local model servers were discovered"#''',
+* Inspect which agent CLIs and local model servers were discovered"#,
+    long_about = r#"EmiWarp — a terminal that runs agents on models you control
+
+EmiWarp reaches models through agent CLIs already installed on this machine
+(claude, codex, gemini, opencode, qwen), pointed at an endpoint you configure.
+Credentials stay with the CLI that owns them; EmiWarp stores none of its own.
+
+It does not contact Warp-operated infrastructure and has no account, tier or
+subscription. Subcommands that drive Warp's cloud agent platform remain in the
+parser but cannot reach it — requests to Warp-operated hosts fail closed."#''',
         guard='display_name = "EmiWarp"',
         why="Rebrand the CLI name, --version output and --help text.",
         notes=[
-            "The `about` text is a long literal and the likeliest anchor to "
-            "drift; a failure here is cosmetic and safe to re-anchor."
+            "clap prefers the struct's doc comment over `about` for long help, "
+            "so `long_about` is set explicitly rather than editing the doc "
+            "comment — a smaller, more stable anchor.",
+            "The text is a long literal and the likeliest anchor to drift; a "
+            "failure here is cosmetic and safe to re-anchor.",
         ],
     ),
     Injection(
