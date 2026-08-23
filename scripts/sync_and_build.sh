@@ -168,63 +168,77 @@ ok "git $(git --version | awk '{print $3}'), python3 $(python3 -c 'import sys;pr
 (( DO_BUILD )) && ok "cargo $(cargo --version | awk '{print $2}')"
 
 # ---------------------------------------------------------------------------
-STAGE="upstream remote"
-step "Upstream remote"
+STAGE="resolving upstream"
 
-if git remote get-url "$UPSTREAM_REMOTE" >/dev/null 2>&1; then
-  current="$(git remote get-url "$UPSTREAM_REMOTE")"
-  if [[ "$current" != "$UPSTREAM_URL" ]]; then
-    warn "remote '$UPSTREAM_REMOTE' points at $current"
-    if confirm "repoint it to $UPSTREAM_URL?"; then
-      (( DRY_RUN )) || git remote set-url "$UPSTREAM_REMOTE" "$UPSTREAM_URL"
-    fi
-  fi
-  ok "$UPSTREAM_REMOTE -> $current"
-else
-  info "adding remote '$UPSTREAM_REMOTE' -> $UPSTREAM_URL"
-  (( DRY_RUN )) || git remote add "$UPSTREAM_REMOTE" "$UPSTREAM_URL"
-  ok "remote added"
-fi
+if [[ "$LAYOUT" == "overlay" ]]; then
+  # No upstream remote is added to this repository: the disposable build tree
+  # owns that relationship. Resolve refs straight off the wire so this works
+  # before the build tree exists, and under --dry-run.
+  step "Resolving upstream"
 
-# ---------------------------------------------------------------------------
-STAGE="fetch"
-
-# Resolve the default branch rather than assuming it. Upstream currently uses
-# `master`; assuming `main` is exactly the sort of silent breakage this script
-# exists to avoid.
-if [[ -z "$UPSTREAM_REF" ]]; then
-  UPSTREAM_REF="$(git symbolic-ref -q --short "refs/remotes/$UPSTREAM_REMOTE/HEAD" 2>/dev/null \
-    | sed "s#^$UPSTREAM_REMOTE/##")"
   if [[ -z "$UPSTREAM_REF" ]]; then
-    UPSTREAM_REF="$(git remote show "$UPSTREAM_REMOTE" 2>/dev/null \
-      | awk '/HEAD branch:/ {print $NF}')"
+    UPSTREAM_REF="$(git ls-remote --symref "$UPSTREAM_URL" HEAD 2>/dev/null \
+      | awk '/^ref:/ {sub("refs/heads/","",$2); print $2; exit}')"
+    [[ -z "$UPSTREAM_REF" ]] && UPSTREAM_REF="master"
+    dim "default branch resolved to '$UPSTREAM_REF'"
   fi
-  [[ -z "$UPSTREAM_REF" ]] && UPSTREAM_REF="master"
-  dim "default branch resolved to '$UPSTREAM_REF'"
-fi
 
-step "Fetching $UPSTREAM_REMOTE/$UPSTREAM_REF"
-if (( DRY_RUN )); then
-  dim "(dry run) would fetch"
+  UPSTREAM_SHA="$(git ls-remote "$UPSTREAM_URL" "refs/heads/$UPSTREAM_REF" 2>/dev/null \
+    | awk '{print $1; exit}')"
+  [[ -n "$UPSTREAM_SHA" ]] || die "could not resolve $UPSTREAM_URL ref '$UPSTREAM_REF' (offline?)"
+  UPSTREAM_SHORT="${UPSTREAM_SHA:0:8}"
+  ok "warpdotdev/warp $UPSTREAM_REF at $UPSTREAM_SHORT"
 else
-  git fetch --tags --prune "$UPSTREAM_REMOTE" "$UPSTREAM_REF"
+  step "Upstream remote"
+
+  if git remote get-url "$UPSTREAM_REMOTE" >/dev/null 2>&1; then
+    current="$(git remote get-url "$UPSTREAM_REMOTE")"
+    if [[ "$current" != "$UPSTREAM_URL" ]]; then
+      warn "remote '$UPSTREAM_REMOTE' points at $current"
+      if confirm "repoint it to $UPSTREAM_URL?"; then
+        (( DRY_RUN )) || git remote set-url "$UPSTREAM_REMOTE" "$UPSTREAM_URL"
+      fi
+    fi
+    ok "$UPSTREAM_REMOTE -> $current"
+  else
+    info "adding remote '$UPSTREAM_REMOTE' -> $UPSTREAM_URL"
+    (( DRY_RUN )) || git remote add "$UPSTREAM_REMOTE" "$UPSTREAM_URL"
+    ok "remote added"
+  fi
+
+  if [[ -z "$UPSTREAM_REF" ]]; then
+    UPSTREAM_REF="$(git symbolic-ref -q --short "refs/remotes/$UPSTREAM_REMOTE/HEAD" 2>/dev/null \
+      | sed "s#^$UPSTREAM_REMOTE/##")"
+    if [[ -z "$UPSTREAM_REF" ]]; then
+      UPSTREAM_REF="$(git remote show "$UPSTREAM_REMOTE" 2>/dev/null \
+        | awk '/HEAD branch:/ {print $NF}')"
+    fi
+    [[ -z "$UPSTREAM_REF" ]] && UPSTREAM_REF="master"
+    dim "default branch resolved to '$UPSTREAM_REF'"
+  fi
+
+  step "Fetching $UPSTREAM_REMOTE/$UPSTREAM_REF"
+  if (( DRY_RUN )); then
+    dim "(dry run) would fetch"
+  else
+    git fetch --tags --prune "$UPSTREAM_REMOTE" "$UPSTREAM_REF"
+  fi
+
+  git rev-parse -q --verify "$UPSTREAM_REMOTE/$UPSTREAM_REF" >/dev/null \
+    || die "no such upstream ref: $UPSTREAM_REMOTE/$UPSTREAM_REF"
+
+  UPSTREAM_SHA="$(git rev-parse "$UPSTREAM_REMOTE/$UPSTREAM_REF")"
+  UPSTREAM_SHORT="$(git rev-parse --short "$UPSTREAM_REMOTE/$UPSTREAM_REF")"
+  ok "$UPSTREAM_REMOTE/$UPSTREAM_REF at $UPSTREAM_SHORT"
+  dim "$(git log -1 --format='%s' "$UPSTREAM_SHA")"
 fi
-
-git rev-parse -q --verify "$UPSTREAM_REMOTE/$UPSTREAM_REF" >/dev/null \
-  || die "no such upstream ref: $UPSTREAM_REMOTE/$UPSTREAM_REF"
-
-UPSTREAM_SHA="$(git rev-parse "$UPSTREAM_REMOTE/$UPSTREAM_REF")"
-UPSTREAM_SHORT="$(git rev-parse --short "$UPSTREAM_REMOTE/$UPSTREAM_REF")"
-ok "$UPSTREAM_REMOTE/$UPSTREAM_REF at $UPSTREAM_SHORT"
-dim "$(git log -1 --format='%s' "$UPSTREAM_SHA")"
 
 BASE_SHA="$(git rev-parse -q --verify "refs/emiwarp/last-sync" 2>/dev/null || true)"
 if [[ -n "$BASE_SHA" ]]; then
   if [[ "$BASE_SHA" == "$UPSTREAM_SHA" ]]; then
     ok "already at the newest upstream commit"
   else
-    count="$(git rev-list --count "$BASE_SHA..$UPSTREAM_SHA" 2>/dev/null || echo '?')"
-    info "$count new upstream commit(s) since last sync"
+    info "upstream has moved since the last sync"
   fi
 fi
 
@@ -331,7 +345,17 @@ step "Applying EmiWarp overlay"
 overlay_args=()
 (( DRY_RUN )) && overlay_args+=(--dry-run)
 
-if ! python3 scripts/emiwarp/overlay.py --root "$WORKDIR" ${overlay_args[@]+"${overlay_args[@]}"}; then
+# Under --dry-run the overlay build tree may not exist yet; there is nothing to
+# apply to and nothing to report beyond that.
+if (( DRY_RUN )) && [[ ! -f "$WORKDIR/Cargo.toml" ]]; then
+  dim "(dry run) build tree not created yet — overlay would be applied after clone"
+  python3 scripts/emiwarp/overlay.py --list | sed 's/^/    /'
+  overlay_args+=(--skip)
+fi
+
+if [[ " ${overlay_args[*]-} " == *" --skip "* ]]; then
+  : # build tree absent under dry-run; nothing to apply
+elif ! python3 scripts/emiwarp/overlay.py --root "$WORKDIR" ${overlay_args[@]+"${overlay_args[@]}"}; then
   cat >&2 <<MSG
 
 ${C_RED}Overlay could not be fully applied.${C_RESET}
@@ -359,7 +383,12 @@ STAGE="invariant checks"
 step "Checking EmiWarp invariants"
 
 invariant_failed=0
+if [[ ! -f "$WORKDIR/Cargo.toml" ]]; then
+  dim "(dry run) build tree absent — invariants would be checked after clone"
+  SKIP_INVARIANTS=1
+fi
 check() {
+  (( ${SKIP_INVARIANTS:-0} )) && return 0
   local label="$1" cmd="$2"
   if eval "$cmd" >/dev/null 2>&1; then
     ok "$label"
@@ -464,8 +493,8 @@ fi
 # ---------------------------------------------------------------------------
 STAGE="done"
 printf '\n%s%sEmiWarp sync complete%s\n' "$C_GREEN" "$C_BOLD" "$C_RESET"
-info "upstream   $UPSTREAM_REMOTE/$UPSTREAM_REF @ $UPSTREAM_SHORT"
-info "branch     $WORK_BRANCH"
+info "upstream   warpdotdev/warp $UPSTREAM_REF @ $UPSTREAM_SHORT"
+[[ "$LAYOUT" == "in-tree" ]] && info "branch     $WORK_BRANCH"
 (( DO_BUILD )) && ! (( DRY_RUN )) && info "binary     $WORKDIR/target/release/$BIN_NAME"
 if [[ -n "$STASH_REF" ]]; then
   printf '\n'

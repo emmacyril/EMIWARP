@@ -239,6 +239,8 @@ def ensure_manifest_dep(root: Path, rel: str, line: str, dry_run: bool) -> tuple
 
 def ensure_workspace_member(root: Path, dry_run: bool) -> tuple[bool, str]:
     path = root / "Cargo.toml"
+    if not path.exists():
+        return (False, "workspace Cargo.toml not found")
     text = path.read_text()
     if 'emiwarp = { path = "crates/emiwarp" }' in text:
         return (True, "already present")
@@ -264,7 +266,8 @@ def verify(root: Path) -> int:
         p = root / rel
         if not p.exists() or line not in p.read_text():
             missing.append(f"dep:{rel}")
-    if 'emiwarp = { path = "crates/emiwarp" }' not in (root / "Cargo.toml").read_text():
+    ws = root / "Cargo.toml"
+    if not ws.exists() or 'emiwarp = { path = "crates/emiwarp" }' not in ws.read_text():
         missing.append("dep:workspace")
 
     if missing:
@@ -286,6 +289,18 @@ def main() -> int:
     args = ap.parse_args()
 
     root = args.root.resolve()
+
+    # Everything below assumes `root` is a warp checkout. Say so plainly rather
+    # than failing later with a stack trace on a missing file.
+    if not args.list and not (root / "Cargo.toml").exists():
+        print(
+            f"error: {root} does not look like a warp checkout "
+            f"(no Cargo.toml).\n"
+            f"       In the overlay layout the build tree is created by "
+            f"scripts/sync_and_build.sh on its first real run.",
+            file=sys.stderr,
+        )
+        return 1
 
     if args.list:
         for inj in INJECTIONS:
