@@ -464,8 +464,13 @@ if (( DO_BUILD )) && (( DO_BOOTSTRAP )); then
   if (( DRY_RUN )); then
     dim "(dry run) would run ./script/bootstrap"
   elif [[ -x "$WORKDIR/script/bootstrap" ]]; then
-    boot_args=()
+    # Upstream's bootstrap checks `gcloud auth print-identity-token` and blocks
+    # on an interactive login if it fails. That check only passes inside Warp's
+    # own GCP project, so an EmiWarp build must always skip it.
+    boot_args=(--skip-gcloud-auth)
     (( ASSUME_YES )) && boot_args+=(--yes)
+    export WARP_SKIP_GCLOUD_AUTH=1
+    export WARP_SKIP_SUDO_PROMPT="${WARP_SKIP_SUDO_PROMPT:-1}"
     (cd "$WORKDIR" && ./script/bootstrap ${boot_args[@]+"${boot_args[@]}"}) || die "./script/bootstrap failed"
     ok "bootstrap complete"
   else

@@ -159,9 +159,13 @@ jobs:
         if: matrix.os != 'windows'
         shell: bash
         working-directory: build
-        run: ./script/bootstrap --yes
+        # --skip-gcloud-auth matters: upstream's bootstrap otherwise blocks on
+        # `gcloud auth print-identity-token`, which only Warp employees can
+        # satisfy. Without it every non-Warp build hangs then fails.
+        run: ./script/bootstrap --yes --skip-gcloud-auth
         env:
           WARP_SKIP_SUDO_PROMPT: "1"
+          WARP_SKIP_GCLOUD_AUTH: "1"
           DEBIAN_FRONTEND: noninteractive
 
       - name: Bootstrap (Windows)
