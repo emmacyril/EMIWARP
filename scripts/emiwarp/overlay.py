@@ -148,19 +148,27 @@ INJECTIONS: list[Injection] = [
     Injection(
         ident="binary-target",
         path="app/Cargo.toml",
-        anchor='[[bin]]\nname = "warp-oss"\npath = "src/bin/oss.rs"\ntest = false',
-        mode="before",
-        payload=(
-            '# EmiWarp: binary-target — the shipped binary. Shares the OSS entry point,\n'
-            '# which is the channel with telemetry, crash reporting and autoupdate\n'
-            '# already compiled out upstream.\n'
-            '[[bin]]\n'
-            'name = "emiwarp"\n'
-            'path = "src/bin/oss.rs"\n'
-            'test = false\n\n'
-        ),
+        anchor='warp-oss',
+        mode="replace",
+        payload='emiwarp',
         guard='name = "emiwarp"',
-        why="Emit a natively-named `emiwarp` binary.",
+        why="Rename the OSS binary target to `emiwarp`.",
+        notes=[
+            "Renames rather than adds: two [[bin]] targets sharing one source "
+            "makes cargo build the binary twice and warn about it.",
+            "Rewrites every occurrence — the [[bin]] name, default-run, and the "
+            "bundle metadata key all have to move together or the manifest "
+            "fails to parse.",
+        ],
+    ),
+    Injection(
+        ident="run-script-bin",
+        path="script/run",
+        anchor='WARP_BIN_NAME="warp-oss"',
+        mode="replace",
+        payload='WARP_BIN_NAME="emiwarp"',
+        guard='WARP_BIN_NAME="emiwarp"',
+        why="Keep ./script/run working after the binary rename.",
     ),
 ]
 
