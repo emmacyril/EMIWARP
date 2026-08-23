@@ -18,6 +18,7 @@
 //! crates are MIT). Distributing an EmiWarp binary obliges you to publish the
 //! complete corresponding source under AGPL-3.0.
 
+pub mod agent_server;
 pub mod config;
 pub mod discovery;
 pub mod egress;

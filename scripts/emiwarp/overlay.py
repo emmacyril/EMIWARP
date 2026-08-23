@@ -349,6 +349,33 @@ parser but cannot reach it — requests to Warp-operated hosts fail closed."#'''
         why="Drop the Warp Drive name from profile settings.",
     ),
     Injection(
+        ident="agent-server-start",
+        path="crates/warp_core/src/channel/state.rs",
+        anchor='        let channel = Channel::Oss;\n        let app_id = AppId::new("dev", "emiwarp", "EmiWarp");',
+        mode="replace",
+        payload='        let channel = Channel::Oss;\n        let app_id = AppId::new("dev", "emiwarp", "EmiWarp");\n        // EmiWarp: start the local agent server and point the client at it.\n        // Warp Agent is server-bound — the client POSTs to\n        // {server_root_url}/ai/multi-agent and the backend runs the loop — so\n        // EmiWarp serves that endpoint itself on loopback against whichever\n        // provider the user configured.\n        emiwarp::agent_server::ensure_started();',
+        guard='emiwarp::agent_server::ensure_started',
+        why="Start the local agent server at channel init.",
+    ),
+    Injection(
+        ident="agent-server-url",
+        path="crates/warp_core/src/channel/state.rs",
+        anchor='                server_config: WarpServerConfig::production(),',
+        mode="replace",
+        payload='                server_config: WarpServerConfig {\n                    // EmiWarp: the agent endpoint is served locally.\n                    server_root_url: emiwarp::agent_server::base_url().into(),\n                    ..WarpServerConfig::production()\n                },',
+        guard='server_root_url: emiwarp::agent_server::base_url()',
+        why="Point the client's agent endpoint at loopback.",
+    ),
+    Injection(
+        ident="agent-local-auth",
+        path="crates/warp_server_client/src/auth/session.rs",
+        anchor='        let Some(credentials) = self.auth_state.credentials() else {\n            bail!("missing authentication credentials");\n        };',
+        mode="replace",
+        payload='        let Some(credentials) = self.auth_state.credentials() else {\n            // EmiWarp: the agent endpoint is served on loopback by EmiWarp\n            // itself, which authenticates nobody. Failing here is what produced\n            // "missing authentication credentials" on every agent request.\n            return Ok(AuthToken::Bearer("emiwarp-local".to_string()));\n        };',
+        guard='EmiWarp: the agent endpoint is served on loopback',
+        why="Stop agent requests failing for want of a Warp account.",
+    ),
+    Injection(
         ident="run-script-bin",
         path="script/run",
         anchor='WARP_BIN_NAME="warp-oss"',
@@ -371,6 +398,8 @@ ASSET_COPIES = [
 # Crates whose manifests need an `emiwarp` dependency for the injections above.
 MANIFEST_DEPS = [
     ("app/Cargo.toml", "emiwarp.workspace = true"),
+    ("crates/warp_core/Cargo.toml", "emiwarp.workspace = true"),
+    ("crates/warp_server_client/Cargo.toml", "emiwarp.workspace = true"),
     ("crates/http_client/Cargo.toml", "emiwarp.workspace = true"),
 ]
 
