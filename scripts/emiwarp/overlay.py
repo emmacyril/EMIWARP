@@ -206,6 +206,36 @@ parser but cannot reach it — requests to Warp-operated hosts fail closed."#'''
         ],
     ),
     Injection(
+        ident="bundle-branding",
+        path="script/macos/bundle",
+        anchor='    WARP_BIN="warp-oss"\n    BUNDLE_ID="dev.warp.WarpOss"\n    WARP_APP_NAME="WarpOss"\n    WARP_SCHEME_NAME="warposs"',
+        mode="replace",
+        payload='    WARP_BIN="emiwarp"\n    BUNDLE_ID="dev.emiwarp.EmiWarp"\n    WARP_APP_NAME="EmiWarp"\n    WARP_SCHEME_NAME="emiwarp"',
+        guard='WARP_APP_NAME="EmiWarp"',
+        why="Produce an installable EmiWarp.app rather than WarpOss.app.",
+        notes=[
+            "Without this the bundler looks for a `warp-oss` binary that "
+            "binary-target already renamed, so bundling fails outright.",
+            "BUNDLE_ID matches brand-app-id so macOS treats EmiWarp as a "
+            "separate app from any installed Warp.",
+        ],
+    ),
+    Injection(
+        ident="bundle-metadata",
+        path="app/Cargo.toml",
+        anchor='category = "public.app-category.developer-tools"\ncopyright = "© 2025, Denver Technologies, Inc"\nidentifier = "dev.warp.WarpOss"\nname = "WarpOss"\nresources = ["assets/onboarding"]\nicon = ["channels/oss/icon/no-padding/512x512.png", "channels/oss/icon/no-padding/icon.ico"]\nshort_description = "The open-source, cloud-backed terminal for individuals and teams."',
+        mode="replace",
+        payload='category = "public.app-category.developer-tools"\ncopyright = "© 2025, Denver Technologies, Inc"\nidentifier = "dev.emiwarp.EmiWarp"\nname = "EmiWarp"\nresources = ["assets/onboarding"]\nicon = ["channels/oss/icon/no-padding/512x512.png", "channels/oss/icon/no-padding/icon.ico"]\nshort_description = "A terminal that runs agents on models you control."',
+        guard='name = "EmiWarp"',
+        why="Name the produced .app bundle EmiWarp, not WarpOss.",
+        notes=[
+            "cargo-bundle reads the app name and identifier from this "
+            "metadata block, not from script/macos/bundle's variables, so "
+            "bundle-branding alone still emits WarpOss.app.",
+            "Upstream copyright is left intact: the code is still theirs.",
+        ],
+    ),
+    Injection(
         ident="run-script-bin",
         path="script/run",
         anchor='WARP_BIN_NAME="warp-oss"',
