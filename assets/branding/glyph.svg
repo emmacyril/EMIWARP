@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Cursor: upright, the fixed point you type at. -->
+  <rect x="10" y="13" width="7" height="37" rx="1.5" fill="#E39B3C"/>
+  <!-- Three arms, sheared 3px right at the top: an E that is also motion. -->
+  <polygon points="27,13 57,13 54,20 24,20" fill="#E39B3C"/>
+  <polygon points="27,28 48,28 45,35 24,35" fill="#E39B3C"/>
+  <polygon points="27,43 57,43 54,50 24,50" fill="#E39B3C"/>
+</svg>

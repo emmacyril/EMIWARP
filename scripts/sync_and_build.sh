@@ -80,6 +80,9 @@ EMIWARP_OWNED=(
   "EMIWARP.md"
   # Upstream ships its own README.md; ours must win on every sync.
   "README.md"
+  # Brand assets. overlay.py copies these over upstream's icon paths, which
+  # a reset to upstream would otherwise restore to Warp's own mark.
+  "assets"
 )
 
 # ---------------------------------------------------------------------------

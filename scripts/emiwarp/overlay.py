@@ -341,6 +341,15 @@ parser but cannot reach it — requests to Warp-operated hosts fail closed."#'''
     ),
 ]
 
+# EmiWarp-owned files copied over upstream paths. Binary assets cannot be
+# expressed as anchored text edits, and the destinations belong to upstream, so
+# a sync would otherwise restore Warp's own icon over ours.
+ASSET_COPIES = [
+    ("assets/branding/512x512.png", "app/channels/oss/icon/no-padding/512x512.png"),
+    ("assets/branding/icon.ico", "app/channels/oss/icon/no-padding/icon.ico"),
+]
+
+
 # Crates whose manifests need an `emiwarp` dependency for the injections above.
 MANIFEST_DEPS = [
     ("app/Cargo.toml", "emiwarp.workspace = true"),
@@ -432,8 +441,34 @@ def ensure_workspace_member(root: Path, dry_run: bool) -> tuple[bool, str]:
     return (True, "added")
 
 
+def copy_assets(root: Path, dry_run: bool) -> list[tuple[bool, str]]:
+    import filecmp
+    import shutil
+
+    out = []
+    for src_rel, dst_rel in ASSET_COPIES:
+        src, dst = root / src_rel, root / dst_rel
+        if not src.exists():
+            out.append((False, f"missing source {src_rel}"))
+            continue
+        if dst.exists() and filecmp.cmp(src, dst, shallow=False):
+            out.append((True, "already in place"))
+            continue
+        if not dry_run:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        out.append((True, f"copied -> {dst_rel}"))
+    return out
+
+
 def verify(root: Path) -> int:
+    import filecmp
+
     missing = []
+    for src_rel, dst_rel in ASSET_COPIES:
+        src, dst = root / src_rel, root / dst_rel
+        if not src.exists() or not dst.exists() or not filecmp.cmp(src, dst, shallow=False):
+            missing.append(f"asset:{dst_rel}")
     for inj in INJECTIONS:
         path = root / inj.path
         guard = inj.guard or inj.marker()
@@ -507,6 +542,11 @@ def main() -> int:
         print(f"[{'ok' if ok else 'FAIL':>4}] {inj.ident:<18} {msg}")
         if not ok:
             failures.append(inj.ident)
+
+    for (ok, msg), (_, dst_rel) in zip(copy_assets(root, args.dry_run), ASSET_COPIES):
+        print(f"[{'ok' if ok else 'FAIL':>4}] asset {Path(dst_rel).name:<12} {msg}")
+        if not ok:
+            failures.append(f"asset:{dst_rel}")
 
     if failures:
         print(
