@@ -162,6 +162,38 @@ INJECTIONS: list[Injection] = [
         ],
     ),
     Injection(
+        ident="cli-branding",
+        path="crates/warp_cli/src/lib.rs",
+        anchor="""    name = "oz",
+    display_name = "Oz",
+    about = r#"The orchestration platform for cloud agents
+
+The Oz CLI is a tool for running, managing, and orchestrating coding agents at scale.
+Use the CLI to:
+* Launch and inspect cloud agents
+* Schedule cloud agents to run in the future
+* Manage the environments that cloud agents run in
+* Upload secrets to Oz's secure storage"#""",
+        mode="replace",
+        payload='''    name = "emiwarp",
+    display_name = "EmiWarp",
+    about = r#"A terminal that runs agents on models you control
+
+EmiWarp reaches models through agent CLIs already installed on this machine,
+using your own endpoint and credentials. It does not contact Warp-operated
+infrastructure, and has no account or subscription of its own.
+Use the CLI to:
+* Run a coding agent against a local or hosted model
+* Point any OpenAI- or Anthropic-compatible endpoint at the terminal
+* Inspect which agent CLIs and local model servers were discovered"#''',
+        guard='display_name = "EmiWarp"',
+        why="Rebrand the CLI name, --version output and --help text.",
+        notes=[
+            "The `about` text is a long literal and the likeliest anchor to "
+            "drift; a failure here is cosmetic and safe to re-anchor."
+        ],
+    ),
+    Injection(
         ident="run-script-bin",
         path="script/run",
         anchor='WARP_BIN_NAME="warp-oss"',
